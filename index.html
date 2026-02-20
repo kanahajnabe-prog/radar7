@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>كاشف الرادارات الذكي - مباشر</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; background: #1a1a1a; color: white; padding: 20px; }
+        .container { max-width: 500px; margin: auto; background: #2d2d2d; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        #status { font-size: 1.4rem; margin: 20px 0; padding: 15px; border-radius: 8px; transition: 0.3s; }
+        .safe { background: #28a745; border: 2px solid #1e7e34; }
+        .warning { background: #dc3545; border: 2px solid #bd2130; animation: pulse 1s infinite; }
+        #details { font-size: 1.1rem; color: #ccc; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>كاشف الرادارات</h1>
+        <div id="status" class="safe">جاري تحديد موقعك...</div>
+        <div id="details">انتظر قليلاً لجلب البيانات من الخريطة...</div>
+    </div>
+
+    <script>
+        let speedTraps = []; // سيتم ملؤها تلقائياً
+        const alertDistance = 500; // مسافة التنبيه (متر)
+        let lastAlertTime = 0;
+
+        // 1. دالة جلب الرادارات من Overpass API
+        async function fetchRadars(lat, lng) {
+            const radius = 10000; // البحث في محيط 10 كيلو
+            const query = `[out:json];node["highway"="speed_camera"](around:${radius},${lat},${lng});out body;`;
+            const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                speedTraps = data.elements.map(item => ({
+                    lat: item.lat,
+                    lng: item.lon,
+                    limit: item.tags.maxspeed || "غير محدد"
+                }));
+                document.getElementById('details').innerHTML = `تم العثور على ${speedTraps.length} رادار في منطقتك.`;
+            } catch (error) {
+                console.error("خطأ في جلب البيانات:", error);
+            }
+        }
+
+        // 2. دالة حساب المسافة (Haversine)
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        // 3. مراقبة الموقع وتحديث الحالة
+        if (navigator.geolocation) {
+            navigator.geolocation.watchPosition(async (position) => {
+                const { latitude, longitude } = position.coords;
+
+                // جلب الرادارات لأول مرة فقط أو عند التحرك مسافة كبيرة
+                if (speedTraps.length === 0) {
+                    await fetchRadars(latitude, longitude);
+                }
+
+                checkProximity(latitude, longitude);
+            }, (err) => {
+                document.getElementById('status').innerHTML = "يرجى تفعيل GPS";
+            }, { enableHighAccuracy: true });
+        }
+
+        function checkProximity(userLat, userLng) {
+            let nearestTrap = null;
+            let minDistance = Infinity;
+
+            speedTraps.forEach(trap => {
+                const dist = getDistance(userLat, userLng, trap.lat, trap.lng);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    nearestTrap = trap;
+                }
+            });
+
+            const statusDiv = document.getElementById('status');
+            const detailsDiv = document.getElementById('details');
+
+            if (minDistance <= alertDistance) {
+                statusDiv.innerHTML = "🚨 رادار قريب جداً!";
+                statusDiv.className = "warning";
+                detailsDiv.innerHTML = `المسافة: ${Math.round(minDistance)} متر | السرعة: ${nearestTrap.limit} كم/س`;
+                
+                // تنبيه صوتي كل 15 ثانية إذا ظل المستخدم قريباً
+                if (Date.now() - lastAlertTime > 15000) {
+                    speak(`انتبه، رادار بعد ${Math.round(minDistance)} متر`);
+                    lastAlertTime = Date.now();
+                }
+            } else {
+                statusDiv.innerHTML = "الطريق آمن ✅";
+                statusDiv.className = "safe";
+                detailsDiv.innerHTML = `أقرب رادار على بعد ${speedTraps.length > 0 ? Math.round(minDistance/1000) + ' كم' : '...'} `;
+            }
+        }
+
+        function speak(text) {
+            const msg = new SpeechSynthesisUtterance(text);
+            msg.lang = 'ar-SA';
+            window.speechSynthesis.speak(msg);
+        }
+    </script>
+</body>
+</html>
